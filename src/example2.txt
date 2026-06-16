@@ -1,0 +1,4 @@
+export type Vec3<T> = [T; 3]
+type Z = i32
+fn b() -> Vec3<i32> {abc} #yeah
+fn b() -> Vec3<i32> {ac}
