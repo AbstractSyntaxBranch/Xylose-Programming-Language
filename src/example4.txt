@@ -1,1 +1,0 @@
-import "/home/robin/Projects/compiler/src/example2.txt"
