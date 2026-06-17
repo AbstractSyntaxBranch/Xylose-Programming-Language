@@ -26,6 +26,7 @@ int main() {
     }catch(const std::exception& e){
         std::cout << "ERROR: " << e.what() << std::endl;
     }
+
     // parser.printTokenProcessingRange(a);
     return 0;
 }

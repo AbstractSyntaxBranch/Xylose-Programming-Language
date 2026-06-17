@@ -1,5 +1,3 @@
-module;
-#include <stdexcept>
 export module parser;
 import lexer;
 import std;
@@ -7,6 +5,7 @@ import files;
 
 export class Parser : Lexer{
     using Tokens = std::vector<Token>;
+    struct Type;
     struct TokenProcessingRange : Tokens{
         bool is_bracketed = false;
         enum Type : char{
@@ -15,7 +14,7 @@ export class Parser : Lexer{
             NORMAL = '(',
         } collection_type = NORMAL;
         Tokens::iterator original_begin, original_end;
-        std::vector<Type> generic_fill_ins;
+        std::vector<Parser::Type> generic_fill_ins;
         std::uint32_t line;
     };
     using GenericFields = std::unordered_set<std::string>;
@@ -78,6 +77,7 @@ export class Parser : Lexer{
         std::optional<Token> token; //isnt present when dealing with a tuple
         std::vector<TokenASTItem> children; // first one is reserved for the condition if its an if/while/for.
         std::optional<Operator::Type> operator_type;
+        std::vector<Parser::Type> generic_fill_ins;
         enum class CallType{NONE, INDEXED, CALL} call_type = CallType::NONE;
         std::optional<std::pair<std::string, Variable>> variable;
     };
@@ -265,9 +265,8 @@ export class Parser : Lexer{
         ++current_token;
         splitLexerGlobals();
     }
-    std::vector<TokenProcessingRange> getTokenViews(const Tokens& tokens, const GenericFields& generics, bool set_current_tokens = true){
-        if(set_current_tokens) // may be false when there is no reason for reset, for example if its a tuple
-            current_implementation_source = tokens;
+    std::vector<TokenProcessingRange> getTokenViews(const Tokens& tokens, const GenericFields& generics){
+        current_implementation_source = tokens;
         std::uint32_t indent = 0, iterations_since = 0;
         TokenProcessingRange current_view;
         std::vector<TokenProcessingRange> out;
@@ -320,15 +319,19 @@ export class Parser : Lexer{
         }
         if(indent)
             throw std::runtime_error{std::format("Unclosed brackets on line(started at): {}. Missing ')' to match '('.", first_opened_bracket_line)};
-        groupGenericRangeInTokenViews(out, tokens, generics);
+        out = groupGenericRangeInTokenViews(out, tokens, generics);
 
         return out;
     }
-    void groupGenericRangeInTokenViews(std::vector<TokenProcessingRange>& token_views, const Tokens& tokens, const GenericFields& generics){
+    std::vector<TokenProcessingRange> groupGenericRangeInTokenViews(const std::vector<TokenProcessingRange>& token_views, const Tokens& tokens, const GenericFields& generics){
         const auto& is_opening = [](const auto& token_view){return !token_view.is_bracketed && token_view.front().type == Token::Type::OPERATOR && token_view.front().value == "<";};
         const auto& is_closing = [](const auto& token_view){return !token_view.is_bracketed && token_view.front().type == Token::Type::OPERATOR && token_view.front().value == ">";};
         const auto& is_double_closing = [](const auto& token_view){return !token_view.is_bracketed && token_view.front().type == Token::Type::OPERATOR && token_view.front().value == ">>";};
+        std::vector<TokenProcessingRange> out;
+        std::size_t minimum_to_continue = 0;
         for(const auto& [index, token_view] : std::views::enumerate(token_views)){
+            if(minimum_to_continue > index)
+                continue;
             if(is_opening(token_view)){
                 std::size_t indent = 0, start = index;
                 for(std::size_t i = index; i < token_views.size(); ++i){
@@ -344,18 +347,30 @@ export class Parser : Lexer{
                     if(!indent){
                         //is it even a function call?
                         if(token_views.size() != i + 1 && token_views[i+1].is_bracketed && token_views[i+1].collection_type == TokenProcessingRange::NORMAL && start && !token_views[start-1].is_bracketed && token_views[start-1].front().type == Token::Type::IDENTIFIER){
+                            std::vector<Type> generic_fields;
                             const auto& tokens_copy = this->tokens;
                             this->tokens = tokens;
-                            current_token = this->tokens.begin();
-                            parseGenericArguments(generics);
+                            current_token = this->tokens.begin() + start;
+                            try{
+                                generic_fields = parseGenericArguments(generics);
+                            }catch(...){
+                                break;
+                            }
                             this->tokens = tokens_copy;
-                            printTokenProcessingRange(std::vector<TokenProcessingRange>(token_views.begin() + start, token_views.begin() + i + 1));
+                            std::println("Suitable Expression Found");
+                            minimum_to_continue = i + 1;
+                            out.back().generic_fill_ins = generic_fields;
+                            goto skip;
                         }
                         break;
                     }
                 }
             }
+            out.push_back(token_view);
+            skip:
         }
+        printTokenProcessingRange(out);
+        return out;
     }
     bool mustBeOperator(bool current_non_operator, bool current_multi_size, const TokenProcessingRange& token_view, Operator::Type type){
         return !current_non_operator && !current_multi_size && std::ranges::none_of(
@@ -373,33 +388,55 @@ export class Parser : Lexer{
     }
     std::vector<std::vector<TokenProcessingRange>> getLines(const std::vector<TokenProcessingRange>& token_views){
         std::vector<std::vector<TokenProcessingRange>> out;
+        //lol, so much variables; this function does so much, yet so little
         bool prev_left_operator = false;
         bool prev_non_operator = false;
         bool prev_multi_size = false;
         bool prev_preservative_keyword = false;
+        bool prev2_preservative_keyword = false;
         bool prev_do_kw = false;
         bool prev2_do_kw = false;
+        bool prev3_do_kw = false;
         bool prev_ident = false;
         bool prev_is_single_kw = false;
+        bool is_in_type = false;
+        bool prev_should_close_for_generic = false;
+        std::uint32_t generic_indent = 0;
         std::vector<TokenProcessingRange> current_line;
         for(const TokenProcessingRange& token_view : token_views){
             bool current_non_operator = !token_view.empty() && token_view.front().type != Token::Type::OPERATOR;
             bool current_multi_size = token_view.is_bracketed;
+            is_in_type = (is_in_type && (current_multi_size ? true : token_view.front().value != "=")) || (!current_multi_size && token_view.front().value == ":");
             bool current_right_operator = mustBeOperator(current_non_operator, current_multi_size, token_view, Operator::RIGHT);
             bool is_semicolon = !current_multi_size && token_view.front().type == Token::Type::SEMICOLON;
             bool is_single_kw = !current_multi_size && (token_view.front().value == "break" || token_view.front().value == "continue") && token_view.front().type == Token::Type::KEYWORD;
+            bool generic_indent_changed = false;
+            if(is_in_type && !current_multi_size && token_view.front().type == Token::Type::OPERATOR){
+                generic_indent_changed = true;
+                if(token_view.front().value == "<")
+                    ++generic_indent;
+                else if(token_view.front().value == ">")
+                    --generic_indent;
+                else if(token_view.front().value == ">>"){
+                    if(generic_indent == 1)
+                        throw std::runtime_error{std::format("On line: {}, double generic indentation closing, where only one was required.", token_view.line)};
+                    generic_indent -= 2;
+                }
+                else generic_indent_changed = false;
+            }
             if(
                 (
                     (
                         (prev_left_operator && (current_right_operator || current_non_operator)) ||
                         (prev_non_operator && ((current_non_operator && !current_multi_size) || current_right_operator)) ||
                         current_multi_size ? (!prev_ident && prev_non_operator) : false
-                    ) && !prev_preservative_keyword
-                ) || is_semicolon || is_single_kw || prev_is_single_kw
+                    ) && !prev_preservative_keyword && !prev2_preservative_keyword && !prev_do_kw && !prev2_do_kw && !prev3_do_kw
+                ) || is_semicolon || is_single_kw || prev_is_single_kw || (prev_should_close_for_generic && (token_view.is_bracketed || token_view.front().value != "=" || token_view.front().type != Token::Type::OPERATOR))
             ){
                 if(!current_line.empty())
-                out.push_back(current_line);
+                    out.push_back(current_line);
                 current_line.clear();
+                is_in_type = false;
             }
             if(!is_semicolon)
                 current_line.push_back(token_view);
@@ -407,11 +444,14 @@ export class Parser : Lexer{
             prev_left_operator = mustBeOperator(current_non_operator, current_multi_size, token_view, Operator::LEFT);
             prev_multi_size = current_multi_size;
             prev_non_operator = current_non_operator;
+            prev2_preservative_keyword = prev_preservative_keyword;
             prev_preservative_keyword = current_line.size() == 1 && !current_multi_size && token_view.front().type == Token::Type::KEYWORD && (token_view.front().value == "do" || token_view.front().value == "while" || token_view.front().value == "if" || token_view.front().value == "ret" || token_view.front().value == "for" || token_view.front().value == "elif" || token_view.front().value == "else"); // true and false may not force the line to keep going on
+            prev3_do_kw = prev2_do_kw;
             prev2_do_kw = prev_do_kw;
             prev_do_kw = prev_preservative_keyword && token_view.front().value == "do";
             prev_ident = !current_multi_size && token_view.front().type == Token::Type::IDENTIFIER;
             prev_is_single_kw = is_single_kw;
+            prev_should_close_for_generic = generic_indent_changed && generic_indent == 0;
         }
         out.push_back(current_line);
         return out;
@@ -477,6 +517,7 @@ export class Parser : Lexer{
             token.children = token_views[1].empty() ? std::vector<TokenASTItem>{} : parseExprList(token_views[1], line, generic_fields);
             token.token = token_views[0].front();
             token.call_type = token_views[1].collection_type == TokenProcessingRange::NORMAL ? TokenASTItem::CallType::CALL : TokenASTItem::CallType::INDEXED;
+            token.generic_fill_ins = token_views.front().generic_fill_ins;
             return token;
         }else if (
             isOneOfKeywords(token_views.front(), {"while", "for", "if", "elif"}) &&
@@ -523,9 +564,8 @@ export class Parser : Lexer{
             token.token = token_views.front().front();
             return token;
         }
-        else if(!index){
+        else if(!index)
             throw std::runtime_error{std::format("Couldn't parse the following expression (on line: {}): \n{}", line, getLineAsText(token_views.front().original_begin, token_views.back().original_end))};
-        }
 
         token.token = token_views[*index].front();
         token.operator_type = *index ? (*index == token_views.size()-1 ? Operator::LEFT : Operator::BOTH) : Operator::RIGHT;
@@ -537,7 +577,6 @@ export class Parser : Lexer{
             TokenASTItem token_child = getLineAST(std::vector<TokenProcessingRange>{token_views.begin() + *index + 1, token_views.end()}, line, generic_fields);
             token.children.push_back(token_child);
         }
-        std::println("z");
         return token;
     }
     bool isOneOfKeywords(const TokenProcessingRange& token_view, const std::vector<std::string>& keywords){
@@ -547,7 +586,7 @@ export class Parser : Lexer{
     }
     std::vector<TokenASTItem> parseExprList(const TokenProcessingRange& token_view_parent, std::uint64_t line, const GenericFields& generic_fields){
         std::vector<TokenASTItem> out;
-        const auto& token_views = getTokenViews(token_view_parent, generic_fields, false);
+        const auto& token_views = getTokenViews(token_view_parent, generic_fields);
         std::vector<TokenProcessingRange> current_item;
         for(const auto& token_view : token_views){
             if(!token_view.is_bracketed && token_view.front().type == Token::Type::COMMA){
@@ -566,10 +605,8 @@ export class Parser : Lexer{
         std::vector<TokenASTItem> out;
         const auto& lines = getLines(getTokenViews(tokens, generic_fields));
         for(const auto& token_views : lines){
-            if(std::ranges::none_of(token_views, [&](const TokenProcessingRange& token_view){return !token_view.is_bracketed && token_view.front().type == Token::Type::OPERATOR && (token_view.front().value == ":" || token_view.front().value == ":=");})){
-                std::println("{}", token_views.front().line);
+            if(std::ranges::none_of(token_views, [&](const TokenProcessingRange& token_view){return !token_view.is_bracketed && token_view.front().type == Token::Type::OPERATOR && (token_view.front().value == ":" || token_view.front().value == ":=");}))
                 out.push_back(getLineAST(token_views, token_views.front().line, generic_fields));
-            }
             else{
                 Tokens tokens_cpy = std::move(this->tokens);
                 this->tokens = Tokens(token_views.front().original_begin, token_views.back().original_end);
@@ -586,6 +623,13 @@ export class Parser : Lexer{
             out.append(" " + begin->value + " ");
         return out;
     }
+    std::string getGenericArgumentsAsText(const std::vector<Type>& types){
+        std::string out;
+        for(const auto& type : types){
+            out.append(lookupVariableTypeName(type.type_family) + " ");
+        }
+        return out;
+    }
     void printLineAST(const TokenASTItem& token){
         static std::string indent = "";
         if(token.token)
@@ -597,12 +641,15 @@ export class Parser : Lexer{
                 indent += "-";
                 printLineAST(**token.variable->second.default_value);
                 indent.pop_back();
-            }
+            }else
+                std::println();
         }
         else
             std::print("⹃{}>{}", indent, token.collection_type == TokenProcessingRange::ARRAY ? "Array" : token.collection_type == TokenProcessingRange::NORMAL ? "Tuple" : "MAP");
         if(!token.variable)
             std::println("{}", token.call_type == TokenASTItem::CallType::NONE ? "" : (token.call_type == TokenASTItem::CallType::INDEXED ? " <- array access" : " <- call"));
+        if(token.call_type == TokenASTItem::CallType::CALL)
+            std::println("Generic arguments of call: {}", getGenericArgumentsAsText(token.generic_fill_ins));
         indent += "-";
         for(const TokenASTItem& child : token.children){
             printLineAST(child);
@@ -895,7 +942,9 @@ export class Parser : Lexer{
     void parseNormalBracketEnumeration(std::function<void()> parse_call, char open_bracket = '(', char closing_bracket = ')', Token::Type token_type = Token::Type::BRACKET){
         const auto should_stop = [&](){
             if(current_token->value == ">>" && current_token->type == token_type && closing_bracket == '>'){ //hard-coded solution to a bug
+                const auto i = std::distance(tokens.begin(), current_token); // iterator has no guarantee still being valid after a reallocation has been filed
                 tokens.emplace(current_token, Token{.type = token_type, .value = ">", .line = current_token->line});
+                current_token = tokens.begin() + i;
                 (current_token + 1)->value = ">";
             }
             return current_token->value == std::string{closing_bracket} && current_token->type == token_type;
