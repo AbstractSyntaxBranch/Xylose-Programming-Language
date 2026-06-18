@@ -357,7 +357,6 @@ export class Parser : Lexer{
                                 break;
                             }
                             this->tokens = tokens_copy;
-                            std::println("Suitable Expression Found");
                             minimum_to_continue = i + 1;
                             out.back().generic_fill_ins = generic_fields;
                             goto skip;
@@ -392,8 +391,8 @@ export class Parser : Lexer{
         bool prev_left_operator = false;
         bool prev_non_operator = false;
         bool prev_multi_size = false;
-        bool prev_preservative_keyword = false;
-        bool prev2_preservative_keyword = false;
+        bool current_line_preserve_brackets = false;
+        bool current_line_preserve_next = false;
         bool prev_do_kw = false;
         bool prev2_do_kw = false;
         bool prev3_do_kw = false;
@@ -430,13 +429,18 @@ export class Parser : Lexer{
                         (prev_left_operator && (current_right_operator || current_non_operator)) ||
                         (prev_non_operator && ((current_non_operator && !current_multi_size) || current_right_operator)) ||
                         current_multi_size ? (!prev_ident && prev_non_operator) : false
-                    ) && !prev_preservative_keyword && !prev2_preservative_keyword && !prev_do_kw && !prev2_do_kw && !prev3_do_kw
+                    ) && !prev_do_kw && !prev2_do_kw && !prev3_do_kw
+                     && !current_line_preserve_next
                 ) || is_semicolon || is_single_kw || prev_is_single_kw || (prev_should_close_for_generic && (token_view.is_bracketed || token_view.front().value != "=" || token_view.front().type != Token::Type::OPERATOR))
             ){
-                if(!current_line.empty())
-                    out.push_back(current_line);
-                current_line.clear();
-                is_in_type = false;
+                if(current_line_preserve_brackets && !current_line_preserve_next)
+                    current_line_preserve_brackets = false;
+                else{
+                    if(!current_line.empty())
+                        out.push_back(current_line);
+                    current_line.clear();
+                    is_in_type = false;
+                }
             }
             if(!is_semicolon)
                 current_line.push_back(token_view);
@@ -444,11 +448,11 @@ export class Parser : Lexer{
             prev_left_operator = mustBeOperator(current_non_operator, current_multi_size, token_view, Operator::LEFT);
             prev_multi_size = current_multi_size;
             prev_non_operator = current_non_operator;
-            prev2_preservative_keyword = prev_preservative_keyword;
-            prev_preservative_keyword = current_line.size() == 1 && !current_multi_size && token_view.front().type == Token::Type::KEYWORD && (token_view.front().value == "do" || token_view.front().value == "while" || token_view.front().value == "if" || token_view.front().value == "ret" || token_view.front().value == "for" || token_view.front().value == "elif" || token_view.front().value == "else"); // true and false may not force the line to keep going on
+            current_line_preserve_next = current_line.size() == 1 && !current_multi_size && token_view.front().type == Token::Type::KEYWORD && (token_view.front().value == "do" || token_view.front().value == "while" || token_view.front().value == "if" || token_view.front().value == "ret" || token_view.front().value == "for" || token_view.front().value == "elif" || token_view.front().value == "else"); // true and false may not force the line to keep going on
+            current_line_preserve_brackets |= current_line_preserve_next;
             prev3_do_kw = prev2_do_kw;
             prev2_do_kw = prev_do_kw;
-            prev_do_kw = prev_preservative_keyword && token_view.front().value == "do";
+            prev_do_kw = current_line.size() == 1 && !current_multi_size && token_view.front().type == Token::Type::KEYWORD && token_view.front().value == "do";
             prev_ident = !current_multi_size && token_view.front().type == Token::Type::IDENTIFIER;
             prev_is_single_kw = is_single_kw;
             prev_should_close_for_generic = generic_indent_changed && generic_indent == 0;
