@@ -52,7 +52,9 @@ export class Parser : Lexer{
             RESULT,
             ENUM,
             VOID,
-            GENERIC
+            GENERIC,
+            SET,
+            MAP
         } type_family;
         SubData sub_data; //contains an Struct if it's an structure, else it's just a vector to the underlying type.
     };
@@ -936,6 +938,8 @@ export class Parser : Lexer{
                 return parseTupleType(generics);
             case '[':
                 return parseArrayType(generics);
+            case '{':
+                return parseSetOrMapType(generics);
             default:
                 expectSmthGotSmthIncToken("type", true);
         }
@@ -1099,14 +1103,40 @@ export class Parser : Lexer{
         return type_out;
     }
     Type parseArrayType(const GenericFields& generics){
+        std::uint64_t size;
+        const std::string closing_bracket_msg = "array type closing bracket(a.k.a ']')";
         Type type_out{.type_family = Type::Typename::ARRAY};
         expectSmthGotSmthIncToken("the type of the array");
         std::shared_ptr<Type> sub_type = std::make_shared<Type>(parseType(generics));
-        expectSmthGotSmthIncToken("semicolon(a.k.a ';')", false, Token::Type::SEMICOLON, ";");
-        expectSmthGotSmthIncToken("array size", false, Token::Type::NUMBER);
-        std::uint64_t size = std::stoll(current_token->value); //i mean... i already checked for if it's a number.
-        expectSmthGotSmthIncToken("array type closing bracket(a.k.a ']')", false, Token::Type::BRACKET, "]");
+        expectSmthGotSmthIncToken("semicolon(a.k.a ';')");
+        if(current_token->value == "]" && current_token->type == Token::Type::BRACKET)
+            size = 0;
+        else if(current_token->type != Token::Type::SEMICOLON)
+            expectSmthGotSmthIncToken(closing_bracket_msg, true);
+        else{
+            expectSmthGotSmthIncToken("array size", false, Token::Type::NUMBER);
+            size = std::stoll(current_token->value); //i mean... i already checked for if it's a number.
+            if(size == 0)
+                throw std::runtime_error{std::format("Got an invalid array size, which is invalid on line {}. If you'd like to have a resizable array, please remove the size entirely and if you want a void type, please use the dedicated keyword.", current_token->line)};
+            expectSmthGotSmthIncToken(closing_bracket_msg, false, Token::Type::BRACKET, "]");
+        }
         return Type{.type_family = Type::Typename::ARRAY, .sub_data = std::make_pair<std::shared_ptr<Type>, std::uint64_t>(std::move(sub_type), std::move(size))};
+    }
+    Type parseSetOrMapType(const GenericFields& generics){
+        const std::string set_closing_bracket_msg = "set type closing bracket(a.k.a '}')";
+        expectSmthGotSmthIncToken("key type of map or set sub-type");
+        Type sub_type = parseType(generics);
+        expectSmthGotSmthIncToken(set_closing_bracket_msg);
+        if(current_token->type == Token::Type::BRACKET && current_token->value == "}")
+            return Type{.type_family = Type::Typename::SET, .sub_data = std::vector<Type>{sub_type}};
+        else if(current_token->type == Token::Type::OPERATOR && current_token->value == ":"){
+            expectSmthGotSmthIncToken("value type of map");
+            Type value_type = parseType(generics);
+            expectSmthGotSmthIncToken("map type closing bracket(a.k.a '}')");
+            return Type{.type_family = Type::Typename::MAP, .sub_data = std::vector<Type>{sub_type, value_type}};
+        }
+        expectSmthGotSmthIncToken(set_closing_bracket_msg, true);
+        std::unreachable();
     }
     void expectIncToken(const std::string msg){
         ++current_token;
@@ -1188,6 +1218,10 @@ export class Parser : Lexer{
                 return "Void";
             case Type::Typename::GENERIC:
                 return "Generic";
+            case Type::Typename::SET:
+                return "Set";
+            case Type::Typename::MAP:
+                return "Map";
         }
         return "";
     }
@@ -1205,18 +1239,16 @@ export class Parser : Lexer{
                 break;
             }
             case Type::Typename::TUPLE:
+            case Type::Typename::MAP:
+            case Type::Typename::POINTER:
+            case Type::Typename::RESULT:
+            case Type::Typename::OPTION:
+            case Type::Typename::SET:
             {
                 const auto& types = std::get<std::vector<Type>>(type.sub_data);
                 for(const auto& type : types){
                     printTypeAST(type);
                 }
-                break;
-            }
-            case Type::Typename::POINTER:
-            case Type::Typename::RESULT:
-            case Type::Typename::OPTION:
-            {
-                printTypeAST(std::get<std::vector<Type>>(type.sub_data).front());
                 break;
             }
             case Type::Typename::GENERIC:
