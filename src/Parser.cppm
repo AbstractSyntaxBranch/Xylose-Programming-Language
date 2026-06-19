@@ -61,6 +61,44 @@ export class Parser : Lexer{
             MAP
         } type_family;
         SubData sub_data; //contains an Struct if it's an structure, else it's just a vector to the underlying type.
+        constexpr bool operator ==(const Type& other) const{
+            if(type_family != other.type_family)
+                return false;
+            switch(type_family){
+                case Type::Typename::ARRAY:
+                {
+                    const auto& [array, size] = std::get<std::pair<std::shared_ptr<Type>, std::uint64_t>>(sub_data);
+                    const auto& [other_array, other_size] = std::get<std::pair<std::shared_ptr<Type>, std::uint64_t>>(other.sub_data);
+                    return (*array == *other_array) && size == other_size;
+                }
+                case Type::Typename::TUPLE:
+                case Type::Typename::MAP:
+                case Type::Typename::POINTER:
+                case Type::Typename::RESULT:
+                case Type::Typename::OPTION:
+                case Type::Typename::SET:
+                {
+                    const auto& types = std::get<std::vector<Type>>(sub_data);
+                    const auto& other_types = std::get<std::vector<Type>>(other.sub_data);
+                    return types==other_types;
+                }
+                case Type::Typename::GENERIC:
+                case Type::Typename::STRUCTURE:
+                {
+                    const auto& typename_ = std::get<std::string>(sub_data);
+                    const auto& other_typename = std::get<std::string>(other.sub_data);
+                    return typename_ == other_typename;
+                }
+                case Type::Typename::ENUM:
+                {
+                    const EnumItem _enum = std::get<EnumItem>(sub_data);
+                    const EnumItem other_enum = std::get<EnumItem>(other.sub_data);
+                    return _enum == other_enum;
+                }
+                default:
+                    return true;
+            }
+        }
     };
     using GenericFieldTranslation = std::unordered_map<std::string, Type>; // used to define which generic maps to which type
     struct Typedef : Type, AccessHandler{
@@ -377,7 +415,6 @@ export class Parser : Lexer{
             out.push_back(token_view);
             skip:
         }
-        printTokenProcessingRange(out);
         return out;
     }
     bool mustBeOperator(bool current_non_operator, bool current_multi_size, const TokenProcessingRange& token_view, Operator::Type type){
@@ -409,6 +446,7 @@ export class Parser : Lexer{
         bool prev_is_single_kw = false;
         bool is_in_type = false;
         bool prev_should_close_for_generic = false;
+        bool prev_is_comma = false;
         std::uint32_t generic_indent = 0;
         std::vector<TokenProcessingRange> current_line;
         for(const TokenProcessingRange& token_view : token_views){
@@ -419,6 +457,7 @@ export class Parser : Lexer{
             bool is_semicolon = !current_multi_size && token_view.front().type == Token::Type::SEMICOLON;
             bool is_single_kw = !current_multi_size && (token_view.front().value == "break" || token_view.front().value == "continue") && token_view.front().type == Token::Type::KEYWORD;
             bool generic_indent_changed = false;
+            bool is_comma = !current_multi_size && token_view.front().type == Token::Type::COMMA;
             if(is_in_type && !current_multi_size && token_view.front().type == Token::Type::OPERATOR){
                 generic_indent_changed = true;
                 if(token_view.front().value == "<")
@@ -439,7 +478,7 @@ export class Parser : Lexer{
                         (prev_non_operator && ((current_non_operator && !current_multi_size) || current_right_operator)) ||
                         current_multi_size ? (!prev_ident && prev_non_operator) : false
                     ) && !prev_do_kw && !prev2_do_kw && !prev3_do_kw
-                     && !current_line_preserve_next
+                     && !current_line_preserve_next && !is_comma && !prev_is_comma
                 ) || is_semicolon || is_single_kw || prev_is_single_kw || (prev_should_close_for_generic && (token_view.is_bracketed || token_view.front().value != "=" || token_view.front().type != Token::Type::OPERATOR))
             ){
                 if(current_line_preserve_brackets && !current_line_preserve_next)
@@ -465,8 +504,10 @@ export class Parser : Lexer{
             prev_ident = !current_multi_size && token_view.front().type == Token::Type::IDENTIFIER;
             prev_is_single_kw = is_single_kw;
             prev_should_close_for_generic = generic_indent_changed && generic_indent == 0;
+            prev_is_comma = is_comma;
         }
         out.push_back(current_line);
+        printTokenProcessingRange(out);
         return out;
     }
     void printTokenProcessingRange(const std::vector<std::vector<TokenProcessingRange>>& token_views_collection){
@@ -893,27 +934,35 @@ export class Parser : Lexer{
         std::string name = current_token->value;
         ++current_token;
         std::vector<Type> generic_args = parseGenericArguments(generics);
-        GenericFieldTranslation translation_spec;
+        std::optional<GenericFieldTranslation> translation_spec;
         //Do you know what's going on? Me neither!
         //Heck, I hate accessing multimaps
         //At least it works.... kinda.
         std::optional<Type> to_type;
-        bool found = false;
+        bool found_specialized = false;
         for(const auto& [key, type] : typedefs){
             if(std::ranges::any_of(type.allowed_file_modules,
                 [&](const std::string& allowed_module){
                     bool match = allowed_module == env_path && key == name;
-                    const auto option_translation_spec = linkGenericFieldTranslation(*type.generic_fields, generic_args);
-                    if(option_translation_spec)
-                        translation_spec = *option_translation_spec;
-                    return option_translation_spec && match;
+                    bool is_specialized = false;
+                    std::optional<GenericFieldTranslation> option_translation_spec;
+                    if(type.generic_defaults.empty() && !found_specialized){
+                        option_translation_spec = linkGenericFieldTranslation(*type.generic_fields, generic_args);
+                        if(option_translation_spec)
+                            translation_spec = *option_translation_spec;
+                    }
+                    else if(!type.generic_defaults.empty() && generic_args == type.generic_defaults){
+                        found_specialized = true;
+                        is_specialized = true;
+                    }
+                    return (is_specialized && match) || (option_translation_spec && match && !found_specialized);
                 }
             ))
                 to_type = type;
         }
-        if(to_type)
-            applyGenericFieldTranslation(*to_type, translation_spec);
-        else current_token = start_token_pos; //revert
+        if(to_type && !found_specialized)
+            applyGenericFieldTranslation(*to_type, *translation_spec);
+        else if(!found_specialized) current_token = start_token_pos; //revert
         return to_type;
     }
     std::optional<Type> parseEnumUse(){

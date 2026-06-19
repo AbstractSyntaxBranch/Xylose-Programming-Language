@@ -13,7 +13,7 @@ int main() {
     // parser.printFunctions();
     // parser.printTypedefs();
     // const auto& a = parser.getLines(parser.getTokenViews(**parser.functions.lower_bound("a")->second.implementation));
-    const auto& b = parser.parseLinesFromTokenList(**parser.functions.lower_bound("a")->second.implementation, parser.functions.lower_bound("a")->second.generic_fields);
+    const auto& b = parser.parseLinesFromTokenList(**parser.functions.lower_bound("main")->second.implementation, parser.functions.lower_bound("main")->second.generic_fields);
 
     // const auto& index = parser.getIndexTopOfAST(a.front());
     // std::println("Top: {}", !index ? "NONE" : a.front().at(*index).front().value);
