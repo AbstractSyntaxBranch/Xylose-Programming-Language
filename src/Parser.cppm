@@ -17,7 +17,8 @@ export class Parser : Lexer{
         std::vector<Parser::Type> generic_fill_ins;
         std::uint32_t line;
     };
-    using GenericFields = std::unordered_set<std::string>;
+    using GenericFields = std::vector<std::string>;
+    using GenericDefaults = std::vector<Type>; // just specifies what types the type or function is specialized into
     struct AccessHandler{
         bool will_export; //if it will be exported the next time
         std::vector<std::string> allowed_file_modules; //allowed files to access the item
@@ -27,6 +28,7 @@ export class Parser : Lexer{
     using VariableIndex = std::multimap<std::string, Variable>;
     struct Struct : AccessHandler{
         GenericFields generic_fields;
+        GenericDefaults generic_defaults;
         VariableIndex variables;
     };
     struct Enum : AccessHandler{
@@ -45,6 +47,8 @@ export class Parser : Lexer{
             I32, I64,
             U8, U16,
             U32, U64,
+            F16, F32,
+            F64, BF16,
             STRUCTURE,
             TUPLE,
             POINTER,
@@ -60,6 +64,7 @@ export class Parser : Lexer{
     };
     using GenericFieldTranslation = std::unordered_map<std::string, Type>; // used to define which generic maps to which type
     struct Typedef : Type, AccessHandler{
+        GenericDefaults generic_defaults;
         std::shared_ptr<GenericFields> generic_fields;
         inline bool operator==(Typedef& other){
             return generic_fields == other.generic_fields;
@@ -87,6 +92,7 @@ export class Parser : Lexer{
         bool is_extern = false;
         Type ret_type;
         GenericFields generic_fields;
+        GenericDefaults generic_defaults;
         VariableIndex inputs;
         std::optional<std::shared_ptr<Tokens>> implementation;
         inline bool operator==(Function& other){
@@ -116,7 +122,8 @@ export class Parser : Lexer{
                 "const", "break", "continue",
                 "case", "switch",
                 "true", "false",
-                "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "bf16"
+                "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64",
+                "f16", "f32", "f64", "bf16",
                 "void"
             },
             {
@@ -232,7 +239,7 @@ export class Parser : Lexer{
             const std::string name = current_token->value;
             expectSmthGotSmthIncToken(body_expected_msg, false, Token::Type::BRACKET, "{");
             Struct structure;
-            parseOptionalGeneric(structure.generic_fields);
+            parseOptionalGeneric(structure.generic_fields, structure.generic_defaults);
             if(structure.generic_fields.size())
                 expectSmthGotSmthIncToken(body_expected_msg, false, Token::Type::BRACKET, "{");
             while(true){
@@ -752,10 +759,23 @@ export class Parser : Lexer{
         printVariables(fn.second.inputs);
         std::println("---RETURN TYPE:---");
         printTypeAST(fn.second.ret_type);
-        std::println("---IMPLEMENTATION:---");
-        if(fn.second.implementation)
-        for(const auto& token : **fn.second.implementation){
-            println("Token: {}, with type: {}", token.value, lookupTokenTypeName(token.type));
+        if(!fn.second.generic_fields.empty()){
+            std::println("---GENERICS:---");
+            for(const auto& generic : fn.second.generic_fields){
+                std::println("{}", generic);
+            }
+        }
+        if(!fn.second.generic_defaults.empty()){
+            std::println("---GENERIC DEFAULTS:---");
+            for(const auto& generic : fn.second.generic_defaults){
+                printTypeAST(generic);
+            }
+        }
+        if(fn.second.implementation){
+            std::println("---IMPLEMENTATION:---");
+            for(const auto& token : **fn.second.implementation){
+                println("Token: {}, with type: {}", token.value, lookupTokenTypeName(token.type));
+            }
         }
     }
     void printFunctions(){
@@ -780,7 +800,7 @@ export class Parser : Lexer{
             expectIncToken(std::format("On line: {}, arguments and function body missing.", current_token->line));
         };
         inc_token_arg_and_func_body();
-        parseOptionalGeneric(current_function.generic_fields);
+        parseOptionalGeneric(current_function.generic_fields, current_function.generic_defaults);
         if(current_function.generic_fields.size())
             inc_token_arg_and_func_body();
         current_function.inputs = parseInputVariables(current_function.generic_fields);
@@ -825,7 +845,8 @@ export class Parser : Lexer{
         const std::string type_assign_msg = "type assignment";
         expectSmthGotSmthIncToken(type_assign_msg);
         GenericFields generic_fields;
-        parseOptionalGeneric(generic_fields);
+        GenericDefaults generic_defaults;
+        parseOptionalGeneric(generic_fields, generic_defaults);
         if(!generic_fields.empty())
             expectSmthGotSmthIncToken(type_assign_msg);
         if(current_token->value != "=" || current_token->type != Token::Type::OPERATOR)
@@ -833,6 +854,7 @@ export class Parser : Lexer{
         expectSmthGotSmthIncToken("type");
         Typedef type = static_cast<Typedef>(parseType(generic_fields));
         type.generic_fields = std::make_shared<GenericFields>(generic_fields);
+        type.generic_defaults = generic_defaults;
         type.will_export = is_export;
         type.allowed_file_modules = {filepath};
         typedefs.emplace(name, type);
@@ -856,6 +878,14 @@ export class Parser : Lexer{
             return Type{.type_family = Type::Typename::U64};
         if(current_token->value == "void")
             return Type{.type_family = Type::Typename::VOID};
+        if(current_token->value == "bf16")
+            return Type{.type_family = Type::Typename::BF16};
+        if(current_token->value == "f16")
+            return Type{.type_family = Type::Typename::F16};
+        if(current_token->value == "f32")
+            return Type{.type_family = Type::Typename::F32};
+        if(current_token->value == "f64")
+            return Type{.type_family = Type::Typename::F64};
         throw std::runtime_error{std::format("Unexpected keyword on line: {}. Expected type keyword.", current_token->value)};
     }
     std::optional<Type> parseTypedefUse(const GenericFields& generics){
@@ -900,7 +930,7 @@ export class Parser : Lexer{
     }
     Type parseCustomType(const GenericFields& generics){
         Type type = Type{.sub_data = current_token->value};
-        if(generics.contains(current_token->value)){
+        if(std::ranges::find(generics, current_token->value) != generics.end()){
             type.type_family = Type::Typename::GENERIC;
             return type;
         }
@@ -981,7 +1011,7 @@ export class Parser : Lexer{
         }, '{', '}');
         return Enum{is_export, {filepath}, false, std::make_unique<std::vector<std::string>>(items)};
     }
-    std::vector<Type> parseGenericArguments(const GenericFields& generics){
+    GenericDefaults parseGenericArguments(const GenericFields& generics){
         if(current_token == tokens.end() || current_token->value != "<" || current_token->type != Token::Type::OPERATOR){
             --current_token;
             return {};
@@ -1157,10 +1187,20 @@ export class Parser : Lexer{
         if((type_req && current_token->type != *type_req) || (!exact_match.empty() && current_token->value != exact_match))
             throw std::runtime_error{msg+expectSmthGotSmthButGotExtensionMsg()};
     }
-    void parseOptionalGeneric(GenericFields& generics){
+    void parseOptionalGeneric(GenericFields& generics, GenericDefaults& generic_defaults){
         if(current_token->type != Token::Type::OPERATOR || current_token->value != "<")
             return;
-
+        const auto original_token_iterator = current_token;
+        try{
+            generic_defaults = parseGenericArguments({});
+            ++current_token; // the function gives an offset we need to cancel out;
+        }catch(...){
+            ++current_token;
+            current_token = original_token_iterator;
+            parseGeneric(generics);
+        }
+    }
+    void parseGeneric(GenericFields& generics){
         const auto& expect_inc_token_local = [&](){
             expectIncToken(std::format("On line: {}, missing '>' to match '<'", current_token->line));
             return current_token->type != Token::Type::OPERATOR || current_token->value != ">";
@@ -1173,9 +1213,11 @@ export class Parser : Lexer{
                     std::format("Expected generic name on line: {}. Got: \"{}\"({}).",
                         current_token->line, current_token->value, lookupTokenTypeName(current_token->type))
                 };
-            if(generics.contains(current_token->value))
-                throw std::runtime_error{std::format("Redefinition of generic: \"{}\" on line: {}.", current_token->value, current_token->line)};
-            generics.emplace(current_token->value);
+            if(std::ranges::find(generics, current_token->value) != generics.end())
+                throw std::runtime_error{
+                    std::format("Redefinition of generic: \"{}\" on line: {}.", current_token->value, current_token->line)
+                };
+            generics.push_back(current_token->value);
             if(!expect_inc_token_local())
                 return;
             if(current_token->type != Token::Type::COMMA)
@@ -1222,6 +1264,14 @@ export class Parser : Lexer{
                 return "Set";
             case Type::Typename::MAP:
                 return "Map";
+            case Type::Typename::BF16:
+                return "BFloat(16-bit)";
+            case Type::Typename::F16:
+                return "Float(16-bit)";
+            case Type::Typename::F32:
+                return "Float(32-bit)";
+            case Type::Typename::F64:
+                return "Float(64-bit)";
         }
         return "";
     }
