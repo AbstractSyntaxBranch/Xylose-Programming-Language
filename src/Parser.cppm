@@ -114,6 +114,7 @@ export class Parser : Lexer{
         bool is_constant;
         bool is_export;
         bool is_extern;
+        bool is_static;
         std::size_t decl_line;
         std::optional<std::shared_ptr<TokenASTItem>> default_value;
     };
@@ -132,6 +133,7 @@ export class Parser : Lexer{
         GenericFields generic_fields;
         GenericDefaults generic_defaults;
         VariableIndex inputs;
+        std::vector<std::string> used_prefixes;
         std::optional<std::shared_ptr<Tokens>> implementation;
         inline bool operator==(Function& other){
             return implementation == other.implementation; //same ptr
@@ -151,7 +153,8 @@ export class Parser : Lexer{
     inline static Parser getDefault(std::string& filepath){
         return Parser
         {
-            filepath, {
+            filepath,
+            {
                 "ret", "fn", "if",
                 "elif", "else", "do",
                 "while", "import", "export",
@@ -162,7 +165,9 @@ export class Parser : Lexer{
                 "true", "false",
                 "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64",
                 "f16", "f32", "f64", "bf16",
-                "void"
+                "void", "fallthrough", "flagged",
+                "null", "prefix", "use",
+                "stat" //static
             },
             {
                 {
@@ -307,6 +312,21 @@ export class Parser : Lexer{
             no_extern();
             handleImport(is_next_export);
         }
+        else if(current_token->value == "prefix"){
+            const std::string added_prefix_msg = "the added prefix or void";
+            no_extern();
+            expectSmthGotSmthIncToken(added_prefix_msg);
+            if(current_token->type == Token::Type::KEYWORD && current_token->value == "void")
+                current_prefix.clear();
+            else if(current_token->type == Token::Type::IDENTIFIER)
+                current_prefix = current_token->value;
+            else expectSmthGotSmthIncToken(added_prefix_msg, true);
+        }
+        else if(current_token->value == "use"){
+            no_extern();
+            expectSmthGotSmthIncToken("the used prefix", false, Token::Type::IDENTIFIER);
+            current_used_prefixes.push_back(current_token->value);
+        }
         else expectSmthGotSmthIncToken(valid_global_msg, true);
 
         ++current_token;
@@ -431,6 +451,7 @@ export class Parser : Lexer{
             }
         );
     }
+    //if there's no problem, don't touch it!
     std::vector<std::vector<TokenProcessingRange>> getLines(const std::vector<TokenProcessingRange>& token_views){
         std::vector<std::vector<TokenProcessingRange>> out;
         //lol, so much variables; this function does so much, yet so little
@@ -447,10 +468,11 @@ export class Parser : Lexer{
         bool is_in_type = false;
         bool prev_should_close_for_generic = false;
         bool prev_is_comma = false;
+        bool expression_end = false;
         std::uint32_t generic_indent = 0;
         std::vector<TokenProcessingRange> current_line;
         for(const TokenProcessingRange& token_view : token_views){
-            bool current_non_operator = !token_view.empty() && token_view.front().type != Token::Type::OPERATOR;
+            bool current_non_operator = token_view.empty() || token_view.front().type != Token::Type::OPERATOR;
             bool current_multi_size = token_view.is_bracketed;
             is_in_type = (is_in_type && (current_multi_size ? true : token_view.front().value != "=")) || (!current_multi_size && token_view.front().value == ":");
             bool current_right_operator = mustBeOperator(current_non_operator, current_multi_size, token_view, Operator::RIGHT);
@@ -475,15 +497,18 @@ export class Parser : Lexer{
                 (
                     (
                         (prev_left_operator && (current_right_operator || current_non_operator)) ||
-                        (prev_non_operator && ((current_non_operator && !current_multi_size) || current_right_operator)) ||
-                        current_multi_size ? (!prev_ident && prev_non_operator) : false
+                        (prev_non_operator && ((current_non_operator && (!current_multi_size || token_view.collection_type == TokenProcessingRange::MAP)) || current_right_operator)) ||
+                        (current_multi_size ? (!prev_ident && prev_non_operator) : false)
                     ) && !prev_do_kw && !prev2_do_kw && !prev3_do_kw
                      && !current_line_preserve_next && !is_comma && !prev_is_comma
-                ) || is_semicolon || is_single_kw || prev_is_single_kw || (prev_should_close_for_generic && (token_view.is_bracketed || token_view.front().value != "=" || token_view.front().type != Token::Type::OPERATOR))
+                ) || is_semicolon || is_single_kw || prev_is_single_kw || (prev_should_close_for_generic && (token_view.is_bracketed || token_view.front().value != "=" || token_view.front().type != Token::Type::OPERATOR)) || expression_end || (current_line.size() == 2 && isOneOfKeywords(current_line.front(), {"else"}))
             ){
-                if(current_line_preserve_brackets && !current_line_preserve_next)
+                if(current_line_preserve_brackets && !current_line_preserve_next){
                     current_line_preserve_brackets = false;
+                    expression_end = true;
+                }
                 else{
+                    expression_end = false;
                     if(!current_line.empty())
                         out.push_back(current_line);
                     current_line.clear();
@@ -496,18 +521,24 @@ export class Parser : Lexer{
             prev_left_operator = mustBeOperator(current_non_operator, current_multi_size, token_view, Operator::LEFT);
             prev_multi_size = current_multi_size;
             prev_non_operator = current_non_operator;
-            current_line_preserve_next = current_line.size() == 1 && !current_multi_size && token_view.front().type == Token::Type::KEYWORD && (token_view.front().value == "do" || token_view.front().value == "while" || token_view.front().value == "if" || token_view.front().value == "ret" || token_view.front().value == "for" || token_view.front().value == "elif" || token_view.front().value == "else"); // true and false may not force the line to keep going on
-            current_line_preserve_brackets |= current_line_preserve_next;
+            bool is_keyword = (!current_multi_size && token_view.front().type == Token::Type::KEYWORD);
+            current_line_preserve_next = current_line.size() == 1 && is_keyword &&
+                (token_view.front().value == "do" || token_view.front().value == "while" || token_view.front().value == "if"
+                    || token_view.front().value == "ret" || token_view.front().value == "for" || token_view.front().value == "elif"
+                    || token_view.front().value == "switch" || token_view.front().value == "else"
+                ); // true and false may not force the line to keep going on
+            current_line_preserve_next |= is_keyword ? token_view.front().value == "stat" || token_view.front().value == "const" : false; //isnt required to be the 1st kw.
+            current_line_preserve_brackets |= current_line_preserve_next && token_view.front().value != "ret" && token_view.front().value != "else" && token_view.front().value != "stat" && token_view.front().value != "const";
             prev3_do_kw = prev2_do_kw;
             prev2_do_kw = prev_do_kw;
-            prev_do_kw = current_line.size() == 1 && !current_multi_size && token_view.front().type == Token::Type::KEYWORD && token_view.front().value == "do";
+            prev_do_kw = current_line.size() == 1 && is_keyword && token_view.front().value == "do";
             prev_ident = !current_multi_size && token_view.front().type == Token::Type::IDENTIFIER;
             prev_is_single_kw = is_single_kw;
             prev_should_close_for_generic = generic_indent_changed && generic_indent == 0;
             prev_is_comma = is_comma;
         }
-        out.push_back(current_line);
-        printTokenProcessingRange(out);
+        if(!current_line.empty())
+            out.push_back(current_line);
         return out;
     }
     void printTokenProcessingRange(const std::vector<std::vector<TokenProcessingRange>>& token_views_collection){
@@ -543,6 +574,42 @@ export class Parser : Lexer{
             }
         return {};
     }
+    std::vector<TokenASTItem> getSwitchChildren(const TokenProcessingRange& src, const GenericFields& generics){
+        const auto token_views = getTokenViews(src, generics);
+        if(token_views.empty())
+            return {};
+        if(token_views.front().is_bracketed || token_views.front().front().type != Token::Type::KEYWORD || token_views.front().front().value != "case")
+            throw std::runtime_error{std::format("Expected the case keyword on line: {}", token_views.front().front().line)};
+        std::vector<TokenProcessingRange> current_token_views_range;
+        std::vector<TokenASTItem> switch_children;
+        bool first_iter = true;
+        for(const auto& token_view : token_views){
+            if(!token_view.is_bracketed && token_view.front().type == Token::Type::KEYWORD && token_view.front().value == "case" && !first_iter){
+                switch_children.push_back(getCaseAST(current_token_views_range, generics));
+                current_token_views_range.clear();
+            }
+            first_iter = false;
+            current_token_views_range.push_back(token_view);
+        }
+        switch_children.push_back(getCaseAST(current_token_views_range, generics));
+        return switch_children;
+    }
+    TokenASTItem getCaseAST(std::vector<TokenProcessingRange>& src, const GenericFields& generics){
+        TokenASTItem out{.token = src.front().front()};
+        TokenProcessingRange *cond_end, *cond_begin = &src.at(1);
+        for(auto& token_view : src | std::views::drop(1)){ //first token is the case keyword, ignore
+            if(!token_view.is_bracketed && token_view.front().type == Token::Type::OPERATOR && token_view.front().value == ":"){
+                cond_end = &token_view;
+                break;
+            }
+        }
+        const auto cond_items = std::vector(cond_begin, cond_end);
+        out.children.push_back(getLineAST(cond_items, cond_begin->line, generics));
+        const Tokens code = Tokens(cond_end->original_end, src.back().original_end);
+        out.children.append_range(parseLinesFromTokenList(code, generics));
+        printLineAST(out);
+        return out;
+    }
     TokenASTItem getLineAST(const std::vector<TokenProcessingRange>& token_views, std::uint64_t line, const GenericFields& generic_fields){
         const std::optional<std::uint32_t> index = getIndexTopOfAST(token_views);
         TokenASTItem token;
@@ -566,6 +633,7 @@ export class Parser : Lexer{
                 throw std::runtime_error{std::format("No empty tuple value allowed on line {}, please consider using the built-in void keyword.", line)};
             token.children = children;
             token.collection_type = token_views.front().collection_type;
+
             return token;
         }else if(token_views.size() == 2 && !token_views.front().is_bracketed && token_views.front().front().type == Token::Type::IDENTIFIER && token_views[1].is_bracketed && token_views[1].collection_type != TokenProcessingRange::MAP && !index){
             token.children = token_views[1].empty() ? std::vector<TokenASTItem>{} : parseExprList(token_views[1], line, generic_fields);
@@ -574,17 +642,21 @@ export class Parser : Lexer{
             token.generic_fill_ins = token_views.front().generic_fill_ins;
             return token;
         }else if (
-            isOneOfKeywords(token_views.front(), {"while", "for", "if", "elif"}) &&
+            isOneOfKeywords(token_views.front(), {"while", "for", "if", "elif", "switch"}) &&
             token_views.back().is_bracketed && token_views.back().collection_type == TokenProcessingRange::MAP &&
             token_views.size() > 2
         ){
+            token.token = token_views.front().front();
             const auto condition = getLineAST(std::vector(token_views.begin() + 1, token_views.end() - 1), line, generic_fields);
             token.children.push_back(condition);
+            if(isOneOfKeywords(token_views.front(), {"switch"})){
+                token.children = getSwitchChildren(token_views.back(), generic_fields);
+                return token;
+            }
             auto implementation_source_cpy = current_implementation_source;
             const auto lines = token_views.back().empty() ? std::vector<TokenASTItem>{} : parseLinesFromTokenList(token_views.back(), generic_fields);
             current_implementation_source = implementation_source_cpy;
             token.children.append_range(lines);
-            token.token = token_views.front().front();
             return token;
         }
         else if(
@@ -689,7 +761,7 @@ export class Parser : Lexer{
         if(token.token)
             std::print("⹃{}>Token: \"{}\"", indent, token.token->value);
         else if(token.variable){
-            std::print("⹃{}> Variable declaration of: {} with (simplified) type: {}", indent, token.variable->first, token.variable->second.type ? lookupVariableTypeName(token.variable->second.type->type_family) : "UNKNOWN");
+            std::print("⹃{}> Variable declaration(const: {}, stat: {}) of: {} with (simplified) type: {}", indent, token.variable->second.is_constant, token.variable->second.is_static, token.variable->first, token.variable->second.type ? lookupVariableTypeName(token.variable->second.type->type_family) : "UNKNOWN");
             if(token.variable->second.default_value){
                 std::println(" and default value:");
                 indent += "-";
@@ -734,6 +806,7 @@ export class Parser : Lexer{
     }
     void parseGlobalFnSignature(bool& is_next_extern, bool& is_next_export){
         std::pair<std::string,Function> fn = parseFunctionHead();
+
         fn.second.is_extern = is_next_extern;
         fn.second.allowed_file_modules = {filepath};
         fn.second.will_export = is_next_export;
@@ -836,7 +909,7 @@ export class Parser : Lexer{
     std::pair<std::string, Function> parseFunctionHead(){
         Function current_function;
         expectSmthGotSmthIncToken("function name", false, Token::Type::IDENTIFIER);
-        std::string name = current_token->value;
+        std::string name = current_prefix + current_token->value;
         const auto& inc_token_arg_and_func_body = [&](){
             expectIncToken(std::format("On line: {}, arguments and function body missing.", current_token->line));
         };
@@ -853,6 +926,7 @@ export class Parser : Lexer{
             --current_token; // restore the original offset: function is expected to end with current_token set to the last used token
             current_function.ret_type = Type{.type_family = Type::Typename::VOID};
         }
+
         return {name, current_function};
     }
     void printVariables(const VariableIndex& vars){
@@ -986,13 +1060,11 @@ export class Parser : Lexer{
         std::optional<Type> option_type = parseTypedefUse(generics);
         if(option_type) return *option_type;
         option_type = parseEnumUse();
-        if(option_type) return *option_type;
         if(structs.contains(current_token->value)){
             type.type_family = Type::Typename::STRUCTURE;
             return type;
         }
-
-        throw std::runtime_error{std::format("Unknown type/generic: {} at line: {}.", current_token->value, current_token->line)};
+        throw std::runtime_error{std::format("Unknown type/generic: {} at line: {}. No viable overloads found.", current_token->value, current_token->line)};
     }
     Type parseOperatorBasedType(const GenericFields& generics){
         if(current_token->value == "*"){
@@ -1119,14 +1191,22 @@ export class Parser : Lexer{
     }
     std::pair<std::string, Variable> parseVariableDeclaration(const GenericFields& generics, bool ignore_arg_list = false){
         static const std::string type_expected_err_msg_input = "variable type";
+        std::println("{} : {}", current_token->type == Token::Type::KEYWORD, current_token->value);
+        //const keyword is expected to go before the static keyword.
         Variable var{
-            .is_constant = current_token->type == Token::Type::KEYWORD&&current_token->value == "const",
+            .is_constant = current_token->type == Token::Type::KEYWORD && current_token->value == "const",
             .decl_line = current_token->line
         };
         if(var.is_constant)
-            expectSmthGotSmthIncToken("variable name", false, Token::Type::IDENTIFIER);
+            expectSmthGotSmthIncToken(type_expected_err_msg_input);
+        if(current_token->value == "stat" && current_token->type == Token::Type::KEYWORD){
+            var.is_static = true;
+            expectSmthGotSmthIncToken(type_expected_err_msg_input);
+        }
+        if(current_token->type != Token::Type::IDENTIFIER)
+            expectSmthGotSmthIncToken(type_expected_err_msg_input, true);
         const std::string name = current_token->value;
-        expectSmthGotSmthIncToken(type_expected_err_msg_input, false, Token::Type::OPERATOR); // if := or : is missing, so is the type probably.
+        expectSmthGotSmthIncToken(type_expected_err_msg_input); // if := or : is missing, so is the type probably.
         if(current_token->value == ":"){
             expectSmthGotSmthIncToken(type_expected_err_msg_input);
             var.type = parseType(generics);
@@ -1372,6 +1452,8 @@ export class Parser : Lexer{
     Functions functions;
     //environment path is the path of the current file being processed, this would differ from filepath when parsing the inner-functions after including all modules
     std::string env_path;
+    std::string current_prefix;
+    std::vector<std::string> current_used_prefixes;
     static std::set<std::string> included_full_paths;
     static std::map<std::string, ModuleData> modules;
 };
