@@ -165,9 +165,9 @@ export class Parser : Lexer{
                 "true", "false",
                 "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64",
                 "f16", "f32", "f64", "bf16",
-                "void", "fallthrough", "flagged",
+                "void", "flagged",
                 "null", "prefix", "use",
-                "stat" //static
+                "stat", "default", "match"
             },
             {
                 {
@@ -179,6 +179,7 @@ export class Parser : Lexer{
                     Operator{.name = ":"}, // : for map item access, so not ignored
                     Operator{.name = "in"}, Operator{.name = "by"}, Operator{.name = "thread", .type = Operator::Type::RIGHT},
                     Operator{.name = "where"}, // filter
+                    Operator{.name = "error", .type = Operator::Type::RIGHT}, // filter
                 },
                 {
                     Operator{.name = "="}, Operator{.name = "+="},
@@ -246,9 +247,14 @@ export class Parser : Lexer{
     }
     void splitLexerGlobals(){
         static std::string valid_global_msg = "valid global keyword";
-        if(current_token == tokens.end())
-            return;
         static bool is_next_extern = false, is_next_export = false;
+        if(current_token == tokens.end()){
+            if(is_next_extern || is_next_export){
+                --current_token;
+                expectSmthGotSmthIncToken("global expression to complement the previous keywords");
+            }
+            else return;
+        }
         static const auto no_extern = [&](){
             if(is_next_extern)
                 throw std::runtime_error{
@@ -525,7 +531,7 @@ export class Parser : Lexer{
             current_line_preserve_next = current_line.size() == 1 && is_keyword &&
                 (token_view.front().value == "do" || token_view.front().value == "while" || token_view.front().value == "if"
                     || token_view.front().value == "ret" || token_view.front().value == "for" || token_view.front().value == "elif"
-                    || token_view.front().value == "switch" || token_view.front().value == "else"
+                    || token_view.front().value == "switch" || token_view.front().value == "match" || token_view.front().value == "else"
                 ); // true and false may not force the line to keep going on
             current_line_preserve_next |= is_keyword ? token_view.front().value == "stat" || token_view.front().value == "const" : false; //isnt required to be the 1st kw.
             current_line_preserve_brackets |= current_line_preserve_next && token_view.front().value != "ret" && token_view.front().value != "else" && token_view.front().value != "stat" && token_view.front().value != "const";
@@ -574,7 +580,7 @@ export class Parser : Lexer{
             }
         return {};
     }
-    std::vector<TokenASTItem> getSwitchChildren(const TokenProcessingRange& src, const GenericFields& generics){
+    std::vector<TokenASTItem> getSwitchOrMatchChildren(const TokenProcessingRange& src, const GenericFields& generics){
         const auto token_views = getTokenViews(src, generics);
         if(token_views.empty())
             return {};
@@ -596,13 +602,15 @@ export class Parser : Lexer{
     }
     TokenASTItem getCaseAST(std::vector<TokenProcessingRange>& src, const GenericFields& generics){
         TokenASTItem out{.token = src.front().front()};
-        TokenProcessingRange *cond_end, *cond_begin = &src.at(1);
+        TokenProcessingRange *cond_end = nullptr, *cond_begin = &src.at(1);
         for(auto& token_view : src | std::views::drop(1)){ //first token is the case keyword, ignore
             if(!token_view.is_bracketed && token_view.front().type == Token::Type::OPERATOR && token_view.front().value == ":"){
                 cond_end = &token_view;
                 break;
             }
         }
+        if(!cond_end)
+            throw std::runtime_error{std::format("On line {}, colon expected after the case and condition.", src.front().front().line)};
         const auto cond_items = std::vector(cond_begin, cond_end);
         out.children.push_back(getLineAST(cond_items, cond_begin->line, generics));
         const Tokens code = Tokens(cond_end->original_end, src.back().original_end);
@@ -642,15 +650,15 @@ export class Parser : Lexer{
             token.generic_fill_ins = token_views.front().generic_fill_ins;
             return token;
         }else if (
-            isOneOfKeywords(token_views.front(), {"while", "for", "if", "elif", "switch"}) &&
+            isOneOfKeywords(token_views.front(), {"while", "for", "if", "elif", "switch", "match"}) &&
             token_views.back().is_bracketed && token_views.back().collection_type == TokenProcessingRange::MAP &&
             token_views.size() > 2
         ){
             token.token = token_views.front().front();
             const auto condition = getLineAST(std::vector(token_views.begin() + 1, token_views.end() - 1), line, generic_fields);
             token.children.push_back(condition);
-            if(isOneOfKeywords(token_views.front(), {"switch"})){
-                token.children = getSwitchChildren(token_views.back(), generic_fields);
+            if(isOneOfKeywords(token_views.front(), {"switch", "match"})){
+                token.children = getSwitchOrMatchChildren(token_views.back(), generic_fields);
                 return token;
             }
             auto implementation_source_cpy = current_implementation_source;
@@ -1191,7 +1199,6 @@ export class Parser : Lexer{
     }
     std::pair<std::string, Variable> parseVariableDeclaration(const GenericFields& generics, bool ignore_arg_list = false){
         static const std::string type_expected_err_msg_input = "variable type";
-        std::println("{} : {}", current_token->type == Token::Type::KEYWORD, current_token->value);
         //const keyword is expected to go before the static keyword.
         Variable var{
             .is_constant = current_token->type == Token::Type::KEYWORD && current_token->value == "const",
