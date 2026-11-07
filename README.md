@@ -7,3 +7,4 @@ To build you can `cd $YOURCLONEDDIR/src` into the source and type `xmake build` 
 To install type `xmake install`.
 ## Dependencies
 - XMake
+- FMT
