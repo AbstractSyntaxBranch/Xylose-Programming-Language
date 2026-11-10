@@ -11,5 +11,6 @@ namespace diag {
     constexpr auto DIAGNOSTIC = fmt::emphasis::bold | fmt::fg(fmt::color::dark_cyan);
     constexpr auto DIAGNOSTIC_HEADER = fmt::emphasis::bold | fmt::fg(fmt::color::cyan);
     constexpr auto ERROR = fmt::emphasis::bold | fmt::emphasis::italic | fmt::fg(fmt::color::red);
+    constexpr auto WARNING = fmt::emphasis::bold | fmt::emphasis::italic | fmt::fg(fmt::color::dark_orange);
     constexpr std::string_view UNKNOWN_TYPE = "Unknown";
 }

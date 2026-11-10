@@ -1,0 +1,16 @@
+Command - explaination/usage - flags
+ - help/-h
+        - Shows the help menu.
+                             - (None)
+ - build [FILEPATH]
+        - builds the file specified in [FILEPATH]. If no [FILEPATH] is given, "main.xylo" will be used.
+                             - -o [FILENAME] <- specifies the name that the executable will be.
+                             - -release <- specifies that the program will be build as a release(disables debugging features).
+ - run [FILEPATH]
+        - builds and runs the file specified in [FILEPATH].
+                             - -o [FILENAME] <- specifies the name that the executable will be.
+                             - -release <- specifies that the program will be build as a release(disables debugging features).
+                             - -- {COMMANDS, ...} <- specifies the commands passed to the executable before running it.
+ - new [NAME]
+        - creates a new project called [NAME].
+                             - (None)

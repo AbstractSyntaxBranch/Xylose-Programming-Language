@@ -24,7 +24,7 @@
         case Type::TypeCatagory::U32:
             return "Unsigned integer 32";
         case Type::TypeCatagory::U16:
-            return "Usigned integer 16";
+            return "Unsigned integer 16";
         case Type::TypeCatagory::U8:
             return "Unsigned integer 8";
         case Type::TypeCatagory::BOOL:
@@ -106,7 +106,7 @@
                 formatType(*sub_data.return_type),
                 sub_data.param_types
                 | format_type_list,
-                sub_data.generic_variable_args
+                type.ignore_non_type_details
             );
         }
         case Type::TypeCatagory::GENERIC:

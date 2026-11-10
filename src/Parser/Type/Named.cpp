@@ -1,7 +1,10 @@
 #include "../Parser.hpp"
 #include "../../Data/Config.hpp"
+#include "TypeFmt.hpp"
 #include <algorithm>
+#include <print>
 #include <ranges>
+#include <deque>
 #include <expected>
 #include <format>
 #include <memory>
@@ -38,14 +41,22 @@ std::expected<Type, std::string> Parser::parseNamedType(
             return std::unexpected{std::move(generic_args_res.error())};
         generic_args = generic_args_res.value();
     }else --it;
-    const auto& typedef_entries = M_typedefs
+    const auto typedef_entries = M_typedefs
         | std::views::filter([&](const decltype(M_typedefs)::value_type& typedef_)
             {
                 return typedef_.second->alias == alias && generic_args.size() == typedef_.second->generic_fields.size()
-                && std::ranges::all_of(std::views::zip(typedef_.second->generic_fields, generic_args), [&](const std::pair<std::shared_ptr<GenericField> &, Type &>& e){return e.first->requirement.getTypeCompatibility(e.second);});
+                && std::ranges::any_of(std::views::zip(typedef_.second->generic_fields, generic_args), [](const std::pair<std::shared_ptr<GenericField> &, Type &>& e){return e.first->requirement.overlapsWith(e.second);});
+                // && std::ranges::all_of(std::views::zip(typedef_.second->generic_fields, generic_args), [&](const std::pair<std::shared_ptr<GenericField> &, Type &>& e){return e.first->requirement.getTypeCompatibility(e.second);});
             }
         )
-        | std::ranges::to<decltype(M_typedefs)>();
+        | std::ranges::to<std::vector>();
+    std::vector<Type> accessible_typedef_entries;
+    for (const auto& typedef_entry : typedef_entries | std::views::reverse){
+        if(!Type{.catagory = Type::TypeCatagory::GENERIC_OR, .sub_data = accessible_typedef_entries}.getTypeCompatibility(typedef_entry.second->type))
+            accessible_typedef_entries.push_back(typedef_entry.second->type);
+    }
+    std::reverse(accessible_typedef_entries.begin(), accessible_typedef_entries.end());
+    std::println("{}", accessible_typedef_entries | format_type_list);
     if(!typedef_entries.empty())
         return parseGenericNamedType(generic_args, typedef_entries.back().second);
     return std::unexpected{

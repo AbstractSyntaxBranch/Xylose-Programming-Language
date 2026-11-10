@@ -1,11 +1,13 @@
 #include "../Parser.hpp"
 #include "TypeFmt.hpp"
 #include "../../Data/Config.hpp"
+#include "../../Data/Token.hpp"
 #include <execution>
 #include <expected>
 #include <format>
 #include <memory>
 #include <algorithm>
+#include <print>
 #include <unordered_map>
 #include <execution>
 
@@ -21,13 +23,22 @@ Type Parser::translateGenerics(const std::unordered_map<std::string, Type>& type
         }
         case Type::TypeCatagory::UNDERLYING_TYPE_ACCESS:
         {
-            auto& sub_data = std::get<Type::UnderlyingTypeAccessSubdata>(type.sub_data);
+            auto sub_data = std::get<Type::UnderlyingTypeAccessSubdata>(type.sub_data);
             auto sub_type = std::make_shared<Type>(translateGenerics(type_mappings, *sub_data.type));
+            bool is_indexed_inspectable = false;
+            if(sub_data.access_index)
+                is_indexed_inspectable =
+                    std::ranges::any_of(std::get<std::vector<Type>>(cfg::getIndexedUnderlyingMatchType(*cfg::any_ptr, *sub_data.access_index).sub_data), [&](const Type& ty){return ty.catagory == sub_type->catagory;});
             if(type.catagory == Type::TypeCatagory::UNDERLYING_TYPE_ACCESS
-                && std::ranges::any_of(std::get<std::vector<Type>>(cfg::DIRECT_UNDERLYING_MATCH_TYPE.sub_data), [&](const Type& ty){return ty.catagory == sub_type->catagory;})
-                && !sub_data.access_index.has_value()
+                && (
+                    std::ranges::any_of(std::get<std::vector<Type>>(cfg::DIRECT_UNDERLYING_MATCH_TYPE.sub_data), [&](const Type& ty){return ty.catagory == sub_type->catagory;})
+                    || sub_type->catagory == Type::TypeCatagory::RESULT
+                    || sub_type->catagory == Type::TypeCatagory::MAP
+                    || is_indexed_inspectable
+                )
             ){
-                return translateUnderlyingType(*sub_type);
+                sub_data.type = sub_type;
+                return translateUnderlyingType(sub_data);
             }
             return type;
         }
@@ -78,6 +89,8 @@ std::expected<std::vector<Type>, std::string> Parser::parseGenericArgs(
     std::vector<TokenRange>::iterator& it,
     std::vector<TokenRange>::iterator end
 ) noexcept{
+    std::vector<Token> v{it->begin, (end-1)->end};
+    printTokens(v);
     ++it;
     std::vector<Type> generic_args;
     while(it < end){
@@ -86,7 +99,7 @@ std::expected<std::vector<Type>, std::string> Parser::parseGenericArgs(
             return std::unexpected{std::move(type_res.error())};
         generic_args.push_back(type_res.value());
         ++it;
-        bool is_end = it >= M_token_ranges.end();
+        bool is_end = it >= end;
         bool is_none = (it-(M_token_ranges.end()-it)*is_end)->type == TokenRange::Type::NONE;
         if(!is_end&&is_none){
             if(Token::Type::COMMA == it->begin->type){

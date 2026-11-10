@@ -9,6 +9,7 @@ std::expected<Type, std::string> Parser::parseFnPtrType(
     std::vector<TokenRange>::iterator& it,
     std::vector<TokenRange>::iterator end
 ) noexcept{
+    bool ignore_non_type_data = false;
     ++it;
     if(it->type != TokenRange::Type::REGULAR || it == end)
         return std::unexpected{
@@ -30,7 +31,7 @@ std::expected<Type, std::string> Parser::parseFnPtrType(
         if(it >= sub_rngs.end())
             break;
         if(it->type == TokenRange::Type::NONE && it->begin->type == Token::Type::OPERATOR && it->begin->value == cfg::GENERIC_VARARG_SYMB){
-            sub_data.generic_variable_args = true;
+             ignore_non_type_data = true;
             if(sub_rngs.end() - it > 2){
                 return std::unexpected{
                     std::format("On line: {}, an invalid generic vararg was used(\"..\"). Expected it to be at the end of the function inputs.", it->begin->line, it->begin->value)
@@ -58,5 +59,5 @@ std::expected<Type, std::string> Parser::parseFnPtrType(
     if(!ret_type.has_value())
         return ret_type;
     sub_data.return_type = std::make_shared<Type>(ret_type.value());
-    return Type{.catagory = Type::TypeCatagory::FUNCTION_PTR, .sub_data = sub_data};
+    return Type{.catagory = Type::TypeCatagory::FUNCTION_PTR, .sub_data = sub_data, .ignore_non_type_details = ignore_non_type_data};
 }

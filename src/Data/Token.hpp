@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
-#include "Type.hpp"
+#include "Type/Type.hpp"
 
 struct Token{
     enum class Type : std::uint8_t{

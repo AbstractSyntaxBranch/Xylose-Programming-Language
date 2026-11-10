@@ -2,10 +2,11 @@
 #include "Operator.hpp"
 #include "Token.hpp"
 #include "TokenRange.hpp"
-#include "Type.hpp"
+#include "Type/Type.hpp"
 #include <initializer_list>
 #include <memory>
 #include <string_view>
+#include <ranges>
 #include <tuple>
 #include <unordered_map>
 
@@ -135,6 +136,7 @@ namespace cfg {
         {'[', ']', TokenRange::Type::SQUARE},
     };
     constexpr std::string_view GENERIC_VARARG_SYMB = "..";
+    constexpr std::string_view ERROR_OPERATOR = "err";
     constexpr std::initializer_list<std::initializer_list<Operator>> OPERATORS {
         {
             Operator{.name = "!"},
@@ -144,7 +146,7 @@ namespace cfg {
         {
             Operator{.name = ":"},
             Operator{.name = "in"}, Operator{.name = "async", .input_type = Operator::InputType::RIGHT},
-            Operator{.name = "error", .input_type = Operator::InputType::RIGHT},
+            Operator{.name = ERROR_OPERATOR, .input_type = Operator::InputType::RIGHT},
         },
         {
             Operator{.name = "="}, Operator{.name = "+="},
@@ -212,7 +214,7 @@ namespace cfg {
     const std::string_view GENERIC_OPEN = "<";
     const std::string_view GENERIC_CLOSE = ">";
     const auto any_ptr = std::make_shared<Type>(Type{.catagory = Type::TypeCatagory::GENERIC_ANY});
-    constexpr Type getUnderlyingMatchType(const std::shared_ptr<Type>& sub_data_){
+    constexpr Type getDirectUnderlyingMatchType(const std::shared_ptr<Type>& sub_data_){
         return Type{
             .catagory = Type::TypeCatagory::GENERIC_OR,
             .sub_data = std::vector<Type>{
@@ -222,10 +224,41 @@ namespace cfg {
                 Type{.catagory = Type::TypeCatagory::MAP, .sub_data = Type::MapSubdata{cfg::any_ptr, sub_data_}, .ignore_non_type_details = true},
                 Type{.catagory = Type::TypeCatagory::RESULT, .sub_data = Type::ResultSubdata{sub_data_, cfg::any_ptr}, .ignore_non_type_details = true},
                 Type{.catagory = Type::TypeCatagory::ARRAY, .sub_data = Type::ArraySubdata{.type = sub_data_}, .ignore_non_type_details = true},
-                Type{.catagory = Type::TypeCatagory::FUNCTION_PTR, .sub_data = Type::FnPtrSubdata{.return_type = sub_data_, .generic_variable_args = true}, .ignore_non_type_details = true},
+                Type{.catagory = Type::TypeCatagory::FUNCTION_PTR, .sub_data = Type::FnPtrSubdata{.return_type = sub_data_}, .ignore_non_type_details = true},
             },
         };
     }
 
-    const Type DIRECT_UNDERLYING_MATCH_TYPE = getUnderlyingMatchType(any_ptr);
+    constexpr Type getErrorUnderlyingMatchType(const std::shared_ptr<Type>& sub_data_){
+        return Type{.catagory = Type::TypeCatagory::RESULT, .sub_data = Type::MapSubdata{any_ptr, sub_data_}, .ignore_non_type_details = true};
+    }
+
+    constexpr Type getKeyUnderlyingMatchType(const std::shared_ptr<Type>& sub_data_){
+        return Type{.catagory = Type::TypeCatagory::MAP, .sub_data = Type::MapSubdata{sub_data_, any_ptr}, .ignore_non_type_details = true};
+    }
+
+    constexpr Type getIndexedUnderlyingMatchType(const Type& sub_data_, std::size_t index){
+        std::vector<Type> sub_types;
+        for(const std::size_t _ : std::views::iota(0u, index)){
+            sub_types.push_back(*any_ptr);
+        }
+        sub_types.push_back(sub_data_);
+        return Type{
+            .catagory = Type::TypeCatagory::GENERIC_OR,
+            .sub_data = std::vector<Type>{
+                Type{.catagory = Type::TypeCatagory::TUPLE, .sub_data = sub_types, .ignore_non_type_details = true},
+                Type{.catagory = Type::TypeCatagory::FUNCTION_PTR, .sub_data = Type::FnPtrSubdata{.return_type = any_ptr, .param_types = sub_types}, .ignore_non_type_details = true},
+            },
+        };
+    }
+
+    constexpr std::string_view KEY_ACCESS_NAME_UNDERLYING = "key";
+
+    const Type DIRECT_UNDERLYING_MATCH_TYPE = getDirectUnderlyingMatchType(any_ptr);
+    const Type ERROR_UNDERLYING_MATCH_TYPE = getErrorUnderlyingMatchType(any_ptr);
+    const Type KEY_UNDERLYING_MATCH_TYPE = getKeyUnderlyingMatchType(any_ptr);
+
+    const std::uint8_t VERSION_MAJOR = 0;
+    const std::uint8_t VERSION_MINOR = 1;
+    const std::uint8_t VERSION_PATCH = 0;
 }

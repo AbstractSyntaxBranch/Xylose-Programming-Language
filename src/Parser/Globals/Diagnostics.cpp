@@ -58,5 +58,5 @@ void Parser::diagTypedef(){
     );
     diagGenericFields(typedef_->generic_fields);
     fmt::print(diag::DIAGNOSTIC, "-- Type: ");
-    fmt::println("{}", formatType(typedef_->type));
+    fmt::println("{} <- Generic Dependant: {}", formatType(typedef_->type), typedef_->type.isGenericDependant());
 }

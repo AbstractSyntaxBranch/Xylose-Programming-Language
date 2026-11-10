@@ -1,4 +1,4 @@
-#include "../../Data/Type.hpp"
+#include "../../Data/Type/Type.hpp"
 #include <string>
 #include <ranges>
 

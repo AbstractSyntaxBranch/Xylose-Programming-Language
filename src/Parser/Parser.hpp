@@ -11,7 +11,7 @@ class Parser{
 public:
     Parser(std::vector<Token>& tokens);
     static std::vector<TokenRange> splitIntoTokenRanges(const std::vector<Token>::iterator begin, const std::vector<Token>::iterator end);
-    void splitIntoGlobalTokenRanges();
+    void groupIntoGlobalTokenRanges();
     void parseGlobals();
     void diagFn();
     void diagTypedef();
@@ -67,7 +67,7 @@ public:
         std::vector<TokenRange>::iterator& it,
         std::vector<TokenRange>::iterator end
     ) noexcept;
-    Type translateUnderlyingType(const Type& type) const;
+    Type translateUnderlyingType(const Type::UnderlyingTypeAccessSubdata& sub_data) const;
 private:
     std::vector<Token>& M_tokens; //->
     std::vector<TokenRange> M_token_ranges; //->

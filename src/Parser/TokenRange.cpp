@@ -50,6 +50,6 @@ std::vector<TokenRange> Parser::splitIntoTokenRanges(const std::vector<Token>::i
     return std::move(token_ranges);
 }
 
-void Parser::splitIntoGlobalTokenRanges() {
+void Parser::groupIntoGlobalTokenRanges() {
     M_token_ranges = std::move(splitIntoTokenRanges(M_tokens.begin(), M_tokens.end()));
 }

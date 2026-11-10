@@ -1,6 +1,6 @@
 #pragma once
 #include "TokenRange.hpp"
-#include "Type.hpp"
+#include "Type/Type.hpp"
 #include <set>
 #include <vector>
 
